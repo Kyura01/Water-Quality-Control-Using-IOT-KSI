@@ -1,24 +1,38 @@
-// deklarasi library
-
+// Deklarasi library
 #define BLYNK_TEMPLATE_ID "TMPL6ZneqsbY4"
 #define BLYNK_TEMPLATE_NAME "Monitoring Kualitas Air"
 #define BLYNK_AUTH_TOKEN "Yr3fy_mang9DQcxXcTWx_vrgCEKWX-Ov"
-
 #define BLYNK_PRINT Serial
-#include <BlynkSimpleEsp32.h>
 
+#include <BlynkSimpleEsp32.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <FonnteDuino.h>
 
 LiquidCrystal_I2C lcd(0x27, 16, 2); // Alamat I2C LCD 0x27
 
-char ssid[] = "sasageyo";
-char pass[] = "lalesha123";
+// Deklarasi id pass wifi dan authentikasi blynk
+char ssid[] = "Xiaomi 14T";
+char pass[] = "WawanMKS";
 char auth[] = BLYNK_AUTH_TOKEN;
+
+// Token FonnteDuino
+FonnteDuino fonnte("Yj41jj4HRmPp3ip5uedV"); 
+
+// Deklarasi Timer Pesan
+unsigned long routinePreviousMillis = 0;
+unsigned long anomalyPreviousMillis = 0;
+
+// Interval Rutin: 21 menit (1.260.000 ms)
+const long routineInterval = 1260000; 
+// Interval Anomali: 10 menit (600.000 ms)
+const long anomalyInterval = 600000;     
+// ---------------------------------
+
 // Inisalisasi sensor ke esp32
 namespace pin {
   const byte tds_sensor = 34;
@@ -53,9 +67,13 @@ void setup() {
   delay(1000);
   lcd.clear();
   lcd.print("Cek Air");
+  
   Blynk.begin(auth, ssid, pass);
   delay(1000);
   lcd.clear();
+
+  // Set waktu awal pengiriman WA
+  routinePreviousMillis = millis(); 
 }
 
 void loop() {
@@ -95,11 +113,61 @@ void baca_Tds() {
   Serial.print("TDS: "); Serial.println(sensor::tds, 1);
   Serial.print("Temp: "); Serial.println(sensor::waterTemp, 1);
 
-  // Tentukan status kualitas air perlu dibanyakin status nya
+  // Klasifikasi Status Kualitas Air
   String status;
-  if (sensor::tds < 150) status = "Bagus";
-  else if (sensor::tds < 500) status = "Layak";
-  else status = "Buruk";
+  if (sensor::tds <= 50) status = "Murni";
+  else if (sensor::tds <= 100) status = "Sangat Bagus";
+  else if (sensor::tds <= 200) status = "Bagus";
+  else if (sensor::tds <= 300) status = "Ideal";
+  else if (sensor::tds <= 400) status = "Cukup Ideal";
+  else if (sensor::tds <= 500) status = "Kurang Ideal";
+  else status = "Buruk"; // TDS > 500
+  
+  // --- LOGIKA UTAMA WA DENGAN DUAL TIMER ---
+  unsigned long currentMillis = millis();
+
+  if (sensor::tds > 500) { // TDS LEBIH DARI 500 (STATUS "BURUK")
+    
+    // Kirim pesan Anomali setiap 10 menit
+    if (currentMillis - anomalyPreviousMillis >= anomalyInterval) {
+        anomalyPreviousMillis = currentMillis;
+        Serial.println("!!! ANOMALI TERDETEKSI: Kirim WA Anomali (10 Menit Interval) !!!");
+
+        // Buat pesan dinamis dengan data TDS & Suhu
+        String pesan = "🚨 ANOMALI (10m): Kualitas air BURUK!\n";
+        pesan += "TDS: " + String(sensor::tds, 1) + " ppm\n";
+        pesan += "Suhu: " + String(sensor::waterTemp, 1) + " °C\n";
+        pesan += "Periksa segera!";
+        
+        // No Whatsapp yang akan diberi informasi
+        fonnte.sendMessage("083182236201", pesan); 
+        
+        // Reset timer rutin agar pesan rutin tidak dikirim saat kondisi anomali
+        routinePreviousMillis = currentMillis; 
+    } else {
+        Serial.println("Anomali aktif, menunggu interval 10 menit berikutnya...");
+    }
+
+  } else {
+    // KONDISI NORMAL/LAYAK (TDS <= 500)
+
+    // Kirim pesan rutin setiap 21 menit
+    if (currentMillis - routinePreviousMillis >= routineInterval) {
+      routinePreviousMillis = currentMillis;
+      Serial.println("--- KONDISI NORMAL: Kirim WA Rutin (21 Menit Interval) ---");
+      
+      // Buat pesan rutin dengan data TDS & Suhu
+      String pesan = "✅ Pembaruan Rutin: Air saat ini " + status + ".\n";
+      pesan += "TDS: " + String(sensor::tds, 1) + " ppm\n";
+      pesan += "Suhu: " + String(sensor::waterTemp, 1) + " °C";
+
+      // No Whatsapp yang akan diberi informasi
+      fonnte.sendMessage("083182236201", pesan);
+      
+      // Reset timer anomali
+      anomalyPreviousMillis = currentMillis;
+    }
+  }
 
   // Tampilkan ke LCD
   lcd.clear();
@@ -114,7 +182,7 @@ void baca_Tds() {
   lcd.print("C ");
   lcd.print(status); // Status kualitas air
 
+  // Kirim Tampilan Ke Blynk
   Blynk.virtualWrite(V0,(sensor::tds));
   Blynk.virtualWrite(V2,(sensor::waterTemp));
-
 }
